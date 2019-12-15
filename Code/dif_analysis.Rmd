@@ -127,6 +127,7 @@ df.post_fmce_long = df.post_fmce_long %>% mutate(physics_exp = factor(physics_ex
 ```
 
 ```{r}
+# exclude two items that didn't load on any factor and had poor discrimination
 df.post_fmce_long_sub = df.post_fmce_long %>% subset(!item %in% c('Q15',
                                                                   'Q33'))
 
@@ -232,6 +233,37 @@ dif11g = with(df.post_fmce_long_sub,
             factor(0 + (gender == "F" & scene == "scene11")))
 ```
 
+```{r}
+fit.gender_pre1 = glmer(response ~ gender + dif1g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre5)
+```
+
+```{r}
+fit.gender_pre2 = glmer(response ~ gender + dif2g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre5)
+```
+
+```{r}
+fit.gender_pre3 = glmer(response ~ gender + dif3g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre5)
+```
+
+```{r}
+fit.gender_pre4 = glmer(response ~ gender + dif4g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre5)
+```
 
 ```{r}
 fit.gender_pre5 = glmer(response ~ gender + dif5g_pre + (gender | id) + (factor | item),

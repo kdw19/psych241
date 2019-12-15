@@ -35,29 +35,6 @@ library("qgraph")
 library("gdata")
 ```
 
-```{r load data, eval=FALSE, message=FALSE, include=FALSE}
-#load pre-FMCE raw data
-df.fmce = read_csv("../data/preFMCE.csv")
-
-# exclude test takers whose total score < 5
-df.fmce = df.fmce %>% filter(Score > 5)
-
-# create a new variable of fullname for merging dataframes
-df.fmce = df.fmce %>% unite("name", `First Name`:`Last Name`)
-```
-
-```{r load data-2, eval=FALSE, message=FALSE, include=FALSE}
-df.fmce_post = read_csv("../data/postFMCE.csv")
-df.fmce_post = df.fmce_post %>% unite("name", First:Last)
-
-# exclude test takers whose total score < 5
-df.fmce_post = df.fmce_post %>% filter(Score > 5)
-```
-
-```{r load data-3, eval=FALSE, message=FALSE, include=FALSE}
-df_pre_post = inner_join(df.fmce,df.fmce_post, by = "name")
-write.csv(df_pre_post, "../data/combinedFMCE.csv")
-```
 # Introduction
 The Force and Motion Conceptual Evaluation (FMCE) is a widely-used instrument in Physics Education Research (PER) (cite ). It assesses student conceptual knowledge of Newtonian mechanics using scenarios such as collisions between a car and a truck. The instrument has been used as a pre- and post-knowledge assessment for students enrolled in an introductory mechanics course at Stanford University. The pre-test signals student incoming preparation for college-level physics topics. The comparison between pre- and post-test shows student learning gain from the course. Both questions of incoming preparation and learning gain are of interest to faculty, researchers and administrators. This project analyzed data on FMCE using factor analysis and psychometric models. Specifically, we are interested in the following research questions:
 1) What is the dimensionality of FMCE? 
@@ -67,7 +44,7 @@ The Force and Motion Conceptual Evaluation (FMCE) is a widely-used instrument in
 ## Load pre and post data combined
 ```{r load data-4, message=FALSE}
 # load cleaned-up data that removed redundant entries (n=1106)
-df.fmce_combined = read_csv("../data/FMCE.csv")
+df.fmce_combined = read_csv("FMCE.csv")
 
 # omit incomplete data
 df.fmce_combined = na.omit(df.fmce_combined)
@@ -201,7 +178,7 @@ ggplot(ms,
                geom = "line") +
   expand_limits(y = c(10, 40)) +
   labs(x = "", y = "FMCE score")
-ggsave("back_gap.png")
+
 ```
 ### pre-post gain grouped by gender
 ```{r data visualization - 1.2}
@@ -218,7 +195,7 @@ ggplot(ms,
                geom = "line") +
   expand_limits(y = c(10, 40)) +
   labs(x = "", y = "FMCE score")
-ggsave("gender_gap.png")
+
 ```
 ### performance gap between high and low physics background in pre-FMCE
 ```{r data visualization - 2}
@@ -322,20 +299,7 @@ Exploratory factor analyses were performed to determine if the FMCE test could b
 According to the creators of the instrument (Thornton and Sokoloff, 1998), item 1-7 ("Force Sled") and item 14-21 ("Force Graph") both explore the relationship between force and motion. The difference between the two item groupings is the language used (natural & descriptive vs. graphical & precise) and the reference to the coordinate system in the "Force Graph" group. The authors' analysis of student answers indicated that Q5 was "not a good indicator of Newtonian thinking," and "a wrong answer to Q6 does not necessarily indicate non-Newtonian reasoning." Therefore, both items are problematic. Subsequent analysis by Thornton et al. (2009) dropped Q15, Q33, Q37 and Q39 as these items were answered correctly regardless of students' conceptual model. 
 
 ## EFA MIRT Models
-### MIRT 7-factor Pre
-```{r}
-(mod7 = mirt(data = df.pre_fmce_items, method = 'MHRM', 7))
-```
 
-```{r}
-summary(mod7, rotate = 'promax', suppress=.5)
-```
-```{r}
-coef(mod7, rotate = 'promax', simplify = TRUE)
-```
-```{r}
-M2(mod7, QMC = TRUE)
-```
 ### MIRT 1-factor Pre
 ```{r}
 (mod1 = mirt(data = df.pre_fmce_items, method = 'MHRM', 1))
@@ -380,9 +344,22 @@ summary(mod6, rotate = 'promax', suppress=.5)
 ```{r}
 summary(mod6, rotate = 'varimax', suppress=.5)
 ```
+### MIRT 7-factor Pre
+```{r}
+(mod7 = mirt(data = df.pre_fmce_items, method = 'MHRM', 7))
+```
+
+```{r}
+summary(mod7, rotate = 'promax', suppress=.5)
+```
+```{r}
+coef(mod7, rotate = 'promax', simplify = TRUE)
+```
+```{r}
+M2(mod7, QMC = TRUE)
+```
 
 ### MIRT 8-factor Pre
-
 ```{r}
 (mod8 = mirt(data = df.pre_fmce_items, 8, method = 'MHRM'))
 ```
@@ -391,17 +368,6 @@ M2(mod8, QMC = TRUE)
 ```
 ```{r}
 summary(mod8, rotate = "varimax", suppress=.4)
-```
-### MIRT 10-factor Pre
-```{r}
-(mod10 = mirt(data = df.pre_fmce_items, 10, method = 'MHRM'))
-```
-```{r}
-M2(mod10, QMC = TRUE)
-```
-
-```{r}
-summary(mod10)
 ```
 
 ### MIRT 9-factor Pre
@@ -418,7 +384,17 @@ summary(mod9, rotate = "varimax", suppress=.4)
 ```{r}
 coef(mod9, rotate = "varimax")
 ```
-[ref: https://stats.stackexchange.com/questions/433002/difference-between-irt-and-efa-to-find-factors]
+### MIRT 10-factor Pre
+```{r}
+(mod10 = mirt(data = df.pre_fmce_items, 10, method = 'MHRM'))
+```
+```{r}
+M2(mod10, QMC = TRUE)
+```
+
+```{r}
+summary(mod10)
+```
 
 ### MIRT EFA post-FMCE
 ```{r}
