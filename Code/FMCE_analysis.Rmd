@@ -1,0 +1,1720 @@
+---
+title: "Factor Analysis and IRT Models on FMCE data"
+author: "Karen W."
+date: "10/29/2019"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    theme: cosmo
+    highlight: tango
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+theme_set(
+  theme_classic() + #set the theme 
+    theme(text = element_text(size = 12)) #set the default text size
+)
+```
+
+## Load packages
+```{r, message=FALSE}
+library("knitr")
+library("tidyverse")
+library("lme4")
+library("ltm")
+library("car")
+library("brms")
+library("psych")
+library("mirt")
+library("lavaan")
+library("qgraph")
+library("gdata")
+```
+
+```{r load data, eval=FALSE, message=FALSE, include=FALSE}
+#load pre-FMCE raw data
+df.fmce = read_csv("../data/preFMCE.csv")
+
+# exclude test takers whose total score < 5
+df.fmce = df.fmce %>% filter(Score > 5)
+
+# create a new variable of fullname for merging dataframes
+df.fmce = df.fmce %>% unite("name", `First Name`:`Last Name`)
+```
+
+```{r load data-2, eval=FALSE, message=FALSE, include=FALSE}
+df.fmce_post = read_csv("../data/postFMCE.csv")
+df.fmce_post = df.fmce_post %>% unite("name", First:Last)
+
+# exclude test takers whose total score < 5
+df.fmce_post = df.fmce_post %>% filter(Score > 5)
+```
+
+```{r load data-3, eval=FALSE, message=FALSE, include=FALSE}
+df_pre_post = inner_join(df.fmce,df.fmce_post, by = "name")
+write.csv(df_pre_post, "../data/combinedFMCE.csv")
+```
+# Introduction
+The Force and Motion Conceptual Evaluation (FMCE) is a widely-used instrument in Physics Education Research (PER) (cite ). It assesses student conceptual knowledge of Newtonian mechanics using scenarios such as collisions between a car and a truck. The instrument has been used as a pre- and post-knowledge assessment for students enrolled in an introductory mechanics course at Stanford University. The pre-test signals student incoming preparation for college-level physics topics. The comparison between pre- and post-test shows student learning gain from the course. Both questions of incoming preparation and learning gain are of interest to faculty, researchers and administrators. This project analyzed data on FMCE using factor analysis and psychometric models. Specifically, we are interested in the following research questions:
+1) What is the dimensionality of FMCE? 
+2) How are the item difficulties distributed in the instrument? 
+3) are there items displaying differential item functioning (DIF) for subgroups (e.g., female, students with low incoming preparations), and if so, what are some of the possible underlying mechanisms that lead to DIF?
+
+## Load pre and post data combined
+```{r load data-4, message=FALSE}
+# load cleaned-up data that removed redundant entries (n=1106)
+df.fmce_combined = read_csv("../data/FMCE.csv")
+
+# omit incomplete data
+df.fmce_combined = na.omit(df.fmce_combined)
+
+# create an id variable from 1 to n
+df.fmce_combined$id = factor(seq.int(nrow(df.fmce_combined)))
+```
+
+```{r math back, message=FALSE, echo=FALSE}
+df.fmce_combined %>% count(Math)
+```
+```{r physics back}
+df.fmce_combined %>% count(Physics)
+```
+```{r gender}
+df.fmce_combined %>% count(gender)
+```
+
+```{r data wrangle-1}
+#create the long format for pre-FMCE
+df.pre_fmce = df.fmce_combined %>% dplyr::select(-c(Q1.y:Year.y))
+
+df.pre_fmce = df.pre_fmce %>% rename_at(vars(ends_with(".x")),
+                                        funs(str_remove(., ".x")))
+
+df.pre_fmce = df.pre_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+df.pre_fmce_long = gather(df.pre_fmce, item, response, "Q1":"Q47")
+
+#create the long format for post-FMCE
+df.post_fmce = df.fmce_combined %>% dplyr::select(-c(Q1.x:Q47.x, Score.x, Year.x))
+
+df.post_fmce = df.post_fmce %>% rename_at(vars(ends_with(".y")),
+                                        funs(str_remove(., ".y")))
+
+df.post_fmce = df.post_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+df.post_fmce_long = gather(df.post_fmce, item, response, "Q1":"Q47")
+
+# re-arrange factor levels
+item_levels = c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10",
+                "Q11", "Q12", "Q13", "Q14", "Q15", "Q16", "Q17", "Q18", "Q19",
+                "Q20", "Q21", "Q22", "Q23", "Q24", "Q25", "Q26", "Q27", "Q28",
+                "Q29", "Q30", "Q31", "Q32", "Q33", "Q34", "Q35", "Q36", "Q37", "Q38",
+                "Q39", "Q40", "Q41", "Q42", "Q43", "Q44", "Q45", "Q46", "Q47")
+
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(item = factor(item, levels = item_levels),
+                                               response = as.numeric(response == TRUE))
+df.post_fmce_long = df.post_fmce_long %>% mutate(item = factor(item, levels = item_levels),
+                                                 response = as.numeric(response == TRUE))
+```
+
+Items are grouped by common scenarios ("scenes"") in the FMCE. For example, item 1-7 all refer to the scenario of a sled moving on ice. There are a total of 11 scenes, each with a minimum of one item and a maximum of eight items. The creators of the instrument (Thornton and Sokoloff 1998, Thornton et al. 2009) labeled item 1-7 as the "Force Sled (Newton's 1st and 2nd Laws, natural language)" questions, item 8-10 as the "Cart on Ramp (Force)" questions, item 11-13 as the "Coin Toss (Force)" questions, item 14-21 as the "Newton's 1st and 2nd Laws (Graphical)" questions, item 22-26 "Acceleration" questions, item 27-29 "Coin Toss (Acceleration)" questions, item 30-34 "Newton's 3rd Law (Collisions)" questions, item 35-39 "Newton's 3rd Law (Contact)" questions and item 40-43 "Velocity" questions. It was unclear whether the groupings were based on surface-level features or conceptual knowledge, as both were involved. 
+
+```{r data wrangle -2}
+# create a new variable indicating the item scenario
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(scene = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"), "scene1",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10"), "scene2",
+                                                             ifelse(item %in% c("Q11", "Q12", "Q13"), "scene3",
+                                                                    ifelse(item %in% c("Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20", "Q21"), "scene4",
+                                                                           ifelse(item %in% c("Q22", "Q23", "Q24", "Q25", "Q26"), "scene5",
+                                                                                  ifelse(item %in% c("Q27", "Q28", "Q29"), "scene6",
+                                                                                         ifelse(item %in% c("Q30", "Q31", "Q32", "Q33", "Q34"), "scene7",
+                                                                                                ifelse(item %in% c("Q35", "Q36", "Q37", "Q38"), "scene8",
+                                                                                                       ifelse(item == "Q39", "scene9",
+                                                                                                              ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "scene10", "scene11")))))))))))
+
+scene_levels = c("scene1", "scene2", "scene3", "scene4", "scene5", "scene6", "scene7", "scene8", "scene9", "scene10", "scene11")
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(scene = factor(scene, levels = scene_levels))
+```
+
+```{r}
+# df.pre_fmce = df.pre_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+# df.post_fmce = df.post_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+```
+
+```{r data wrangle -3}
+# create a binarized variable of physics course experience
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+physics_exp_levels = c("low", "high")
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(physics_exp = factor(physics_exp, levels = physics_exp_levels),
+                                               gender = factor(gender))
+```
+
+```{r data wrangle -4}
+# create a new variable indicating the item scenario
+df.post_fmce_long = df.post_fmce_long %>% mutate(scene = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"), "scene1",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10"), "scene2",
+                                                             ifelse(item %in% c("Q11", "Q12", "Q13"), "scene3",
+                                                                    ifelse(item %in% c("Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20", "Q21"), "scene4",
+                                                                           ifelse(item %in% c("Q22", "Q23", "Q24", "Q25", "Q26"), "scene5",
+                                                                                  ifelse(item %in% c("Q27", "Q28", "Q29"), "scene6",
+                                                                                         ifelse(item %in% c("Q30", "Q31", "Q32", "Q33", "Q34"), "scene7",
+                                                                                                ifelse(item %in% c("Q35", "Q36", "Q37", "Q38"), "scene8",
+                                                                                                       ifelse(item == "Q39", "scene9",
+                                                                                                              ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "scene10", "scene11")))))))))))
+
+scene_levels = c("scene1", "scene2", "scene3", "scene4", "scene5", "scene6", "scene7", "scene8", "scene9", "scene10", "scene11")
+df.post_fmce_long = df.post_fmce_long %>% mutate(scene = factor(scene, levels = scene_levels),
+                                                 gender = factor(gender))
+```
+
+```{r data wrangle -5}
+# create a binarized variable of physics course experience
+df.post_fmce_long = df.post_fmce_long %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+physics_exp_levels = c("low", "high")
+df.post_fmce_long = df.post_fmce_long %>% mutate(physics_exp = factor(physics_exp, levels = physics_exp_levels),
+                                                 gender = factor(gender))
+```
+
+```{r data wrangle-6}
+#create the long format of combined data
+df.pre_post_fmce_long = combine(df.pre_fmce_long, df.post_fmce_long)
+```
+
+## Data Visualization
+### pre-post gain grouped by incoming preparation
+```{r data visualization - 1.1}
+ms = df.pre_post_fmce_long %>% 
+  group_by(id, source, physics_exp) %>% 
+  summarise(response = sum(response))
+
+ggplot(ms,
+       aes(x = source, y = response, col = physics_exp)) +
+  stat_summary(fun.data = "mean_se",
+               size = 0.5) +
+  stat_summary(aes(group = physics_exp),
+               fun.y = mean,
+               geom = "line") +
+  expand_limits(y = c(10, 40)) +
+  labs(x = "", y = "FMCE score")
+ggsave("back_gap.png")
+```
+### pre-post gain grouped by gender
+```{r data visualization - 1.2}
+ms = df.pre_post_fmce_long %>% 
+  group_by(id, source, gender) %>% 
+  summarise(response = sum(response))
+
+ggplot(ms,
+       aes(x = source, y = response, col = gender)) +
+  stat_summary(fun.data = "mean_se",
+               size = 0.5) +
+  stat_summary(aes(group = gender),
+               fun.y = mean,
+               geom = "line") +
+  expand_limits(y = c(10, 40)) +
+  labs(x = "", y = "FMCE score")
+ggsave("gender_gap.png")
+```
+### performance gap between high and low physics background in pre-FMCE
+```{r data visualization - 2}
+ms <- df.pre_fmce_long %>%
+  group_by(id, physics_exp, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = physics_exp)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("preFMCE - grouped by incoming preparation")
+```
+### performance gap between high and low physics background in post-FMCE
+```{r data visualization - 3}
+ms <- df.post_fmce_long %>%
+  group_by(id, physics_exp, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = physics_exp)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("postFMCE - group by incoming preparation")
+```
+### performance gap between male and female in pre-FMCE
+```{r data visualization - 2}
+ms <- df.pre_fmce_long %>%
+  group_by(id, gender, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = gender)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("preFMCE - Gender")
+```
+### performance gap between male and female in post-FMCE
+```{r data visualization - 3}
+ms <- df.post_fmce_long %>%
+  group_by(id, gender, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = gender)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("postFMCE Gender")
+```
+
+## Exploratory Factor Analysis
+### Pre-FMCE
+```{r factor analysis - pre0}
+# select only the items
+df.pre_fmce_items = df.pre_fmce %>% dplyr::select(-c(name,
+                                                     gender,
+                                                     Math,
+                                                     Physics,
+                                                     Score,
+                                                     Year,
+                                                     id,
+                                                     physics_exp))
+
+# convert all item response to numeric
+df.pre_fmce_items = lapply(df.pre_fmce_items, as.numeric)
+df.pre_fmce_items = as.data.frame(df.pre_fmce_items)
+```
+
+```{r factor analysis - pre1}
+# select only the items
+df.post_fmce_items = df.post_fmce %>% dplyr::select(-c(name,
+                                                     gender,
+                                                     Math,
+                                                     Physics,
+                                                     Score,
+                                                     Year,
+                                                     id,
+                                                     physics_exp))
+
+# convert all item response to numeric
+df.post_fmce_items = lapply(df.post_fmce_items, as.numeric)
+df.post_fmce_items = as.data.frame(df.post_fmce_items)
+```
+Explore the number of factors using parallel analysis, which compares the observed eigenvalues of a correlation matrix with those from random data. Eigenvalues measure the amount of variance accounted for by a factor. 
+```{r factor analysis - pre2}
+res1a = fa.parallel(df.pre_fmce_items, show.legend = TRUE)
+```
+
+### Correlation Matrix
+```{r qgraph-pre}
+Q_pre = qgraph(cor(df.pre_fmce_items), minimum = 0.4, vsize = 4, layout = "spring")
+qgraph(Q_pre, filetype = "pdf")
+```
+```{r qgraph-post}
+Q_post = qgraph(cor(df.post_fmce_items), minimum = 0.4, vsize = 4, layout = "spring")
+qgraph(Q_post, filetype = "pdf")
+```
+
+Exploratory factor analyses were performed to determine if the FMCE test could be considered unidimensional. Principal factors with an eigenvalue greater than one was retained. A visual inspection of the scree plot indicated a break after the ninth factor. The results were interpreted as evidence for multidimensionality. Most factors are closely related to the scenario groupings, but this is not always the case. 
+
+According to the creators of the instrument (Thornton and Sokoloff, 1998), item 1-7 ("Force Sled") and item 14-21 ("Force Graph") both explore the relationship between force and motion. The difference between the two item groupings is the language used (natural & descriptive vs. graphical & precise) and the reference to the coordinate system in the "Force Graph" group. The authors' analysis of student answers indicated that Q5 was "not a good indicator of Newtonian thinking," and "a wrong answer to Q6 does not necessarily indicate non-Newtonian reasoning." Therefore, both items are problematic. Subsequent analysis by Thornton et al. (2009) dropped Q15, Q33, Q37 and Q39 as these items were answered correctly regardless of students' conceptual model. 
+
+## EFA MIRT Models
+### MIRT 7-factor Pre
+```{r}
+(mod7 = mirt(data = df.pre_fmce_items, method = 'MHRM', 7))
+```
+
+```{r}
+summary(mod7, rotate = 'promax', suppress=.5)
+```
+```{r}
+coef(mod7, rotate = 'promax', simplify = TRUE)
+```
+```{r}
+M2(mod7, QMC = TRUE)
+```
+### MIRT 1-factor Pre
+```{r}
+(mod1 = mirt(data = df.pre_fmce_items, method = 'MHRM', 1))
+```
+
+```{r}
+M2(mod1)
+```
+
+```{r}
+summary(mod1, suppress=.4)
+```
+
+```{r}
+coef(mod1)
+```
+### MIRT 5-factor Pre
+```{r}
+(mod5 = mirt(data = df.pre_fmce_items, method = 'MHRM', 5))
+```
+
+```{r}
+M2(mod5, QMC = TRUE)
+```
+
+```{r}
+summary(mod5, suppress=.4)
+```
+
+### MIRT 6-factor Pre
+```{r}
+(mod6 = mirt(data = df.pre_fmce_items, method = 'MHRM', 6))
+```
+
+```{r}
+M2(mod6, QMC = TRUE)
+```
+
+```{r}
+summary(mod6, rotate = 'promax', suppress=.5)
+```
+```{r}
+summary(mod6, rotate = 'varimax', suppress=.5)
+```
+
+### MIRT 8-factor Pre
+
+```{r}
+(mod8 = mirt(data = df.pre_fmce_items, 8, method = 'MHRM'))
+```
+```{r}
+M2(mod8, QMC = TRUE)
+```
+```{r}
+summary(mod8, rotate = "varimax", suppress=.4)
+```
+### MIRT 10-factor Pre
+```{r}
+(mod10 = mirt(data = df.pre_fmce_items, 10, method = 'MHRM'))
+```
+```{r}
+M2(mod10, QMC = TRUE)
+```
+
+```{r}
+summary(mod10)
+```
+
+### MIRT 9-factor Pre
+```{r}
+(mod9 = mirt(data = df.pre_fmce_items, 9, method = 'MHRM'))
+```
+
+```{r}
+M2(mod9, QMC = TRUE)
+```
+```{r}
+summary(mod9, rotate = "varimax", suppress=.4)
+```
+```{r}
+coef(mod9, rotate = "varimax")
+```
+[ref: https://stats.stackexchange.com/questions/433002/difference-between-irt-and-efa-to-find-factors]
+
+### MIRT EFA post-FMCE
+```{r}
+(mod9_post = mirt(data = df.post_fmce_items, 6, method = 'MHRM'))
+```
+```{r}
+M2(mod9_post, QMC = TRUE)
+```
+```{r}
+summary(mod9_post, rotate = "varimax", suppress=.5)
+```
+
+## MIRT CFA 
+```{r}
+# 6-factor correlated model
+cfa_model_cov = mirt.model('
+F3 = 40-43
+F1 = 44-47
+F6 = 30-32, 34-36, 38-39
+F5 = 8-13, 21, 27-29
+F2 = 1-5, 7, 16, 19
+F4 = 14, 16-18, 22-26
+COV = F1*F2*F3*F4*F5*F6
+')
+```
+
+### Correlated 6-factor CFA MIRT model (Post)
+```{r}
+(mod_cfa_cov = mirt(df.post_fmce_items, model = cfa_model_cov, method = "MHRM"))
+```
+```{r}
+M2(mod_cfa_cov, QMC = TRUE)
+```
+```{r}
+summary(mod_cfa_cov)
+```
+### Correlated 6-factor CFA MIRT model (Pre)
+```{r}
+(mod_cfa_pre = mirt(df.pre_fmce_items, model = cfa_model_cov, method = "MHRM"))
+```
+
+```{r}
+M2(mod_cfa_pre, QMC = TRUE)
+```
+
+### CFA bi-factor Model - post
+```{r}
+specific = c(rep(2, 5), NA, 2, rep(5, 6), 4, NA, rep(4, 3), 2, NA, 5, rep(4, 5), rep(5, 3), rep(6, 3), NA, rep(6, 3), NA, 6, 6, rep(3, 4), rep(1, 4))
+specific
+length(specific)
+```
+
+```{r}
+(mod_bifactor_post = bfactor(df.post_fmce_items, model = specific))
+```
+
+```{r}
+M2(mod_bifactor_post, QMC = TRUE)
+```
+
+```{r}
+coef(mod_bifactor_post)
+```
+```{r}
+summary(mod_bifactor_post)
+```
+
+### CFA bi-factor Model - pre
+```{r}
+# specify the bi-factor model in a different way
+cfa_model_gen = mirt.model('
+F3 = 40-43
+F1 = 44-47
+F6 = 30-32, 34-36, 38-39
+F5 = 8-13, 21, 27-29
+F2 = 1-5, 7, 19
+F4 = 14, 16-18, 22-26
+G = 1-47
+')
+```
+
+```{r}
+(mod_cfa_pre_gen = mirt(df.pre_fmce_items, model = cfa_model_gen, method = "MHRM"))
+
+```
+```{r}
+M2(mod_cfa_pre_gen, QMC = TRUE)
+```
+```{r}
+summary(mod_cfa_pre_gen)
+```
+
+```{r}
+(mod_bifactor_pre = bfactor(df.pre_fmce_items, model = specific,  technical = list(NCYCLES = 2000)))
+```
+
+```{r}
+M2(mod_bifactor_pre, QMC = TRUE)
+```
+```{r}
+coef(mod_bifactor_pre)
+```
+```{r}
+summary(mod_bifactor_pre)
+```
+# Extra Codes
+## Multiple group and DIF analysis
+MGA takes into account empirical grouping clusters that are thought to behave differently to the response data. MGA has two extreme ends: completely ignore group membership or completely separate the data according to memebership. 
+
+```{r}
+mirtCluster()
+```
+
+```{r}
+(mod_gender = multipleGroup(df.post_fmce_items, model=1, group=gender, 
+                            Invariance = c(1:7, 'free_means', 'free_var'), SE = TRUE))
+
+DIF(mod_gender, c('a1','d'), Wald = TRUE, p.adjust = "fdr")
+```
+
+```{r}
+gender = as.character(df.pre_fmce$gender)
+back = as.character(df.pre_fmce$physics_exp)
+
+# gender = data.frame(gender)
+# back = data.frame(back)
+# covdata = data.frame(gender, back)
+```
+
+```{r}
+# specify the bi-factor model in a different way
+cfa_model_gen = mirt.model('
+F3 = 40-43
+F1 = 44-47
+F6 = 30-32, 34-36, 38-39
+F5 = 8-13, 21, 27-29
+F2 = 1-5, 7, 19
+F4 = 14, 16-18, 22-26
+G = 1-47
+')
+```
+
+```{r}
+#group as a fixed effect predictor (uniform dif)
+dif1 = mixedmirt(data = df.pre_fmce_items, covdata = gender, model = cfa_model_gen, fixed = ~ 0 + gender + items)
+```
+
+```{r}
+summary(dif1)
+```
+
+```{r}
+#completely independent model
+
+coef(mod_gender, simplify = TRUE)
+```
+```{r}
+DIF(mod_gender, c('a1', 'd'), method = 'MHRM')
+```
+
+```{r}
+plot(mod_gender, type = 'trace')
+```
+```{r}
+#completely independent model
+(mod_gender = multipleGroup(df.post_fmce_items, model=cfa_model_gen, group=gender, SE = TRUE,
+                            invariance = c(1:7, 'free_means', 'free_var'), method = 'MHRM'))
+coef(mod_gender, simplify = TRUE)
+```
+```{r}
+DIF(mod_gender, c('d'), method = 'MHRM')
+```
+
+```{r}
+itemplot(mod_gender, 37)
+```
+
+```{r}
+# constrain the intercepts and slopes to be equal across groups, while freeing the latent mean and variance
+mod.freegroup = multipleGroup(df.pre_fmce_items, model=1, group=gender, invariance=c('intercepts', 'slopes', 'free_means', 'free_varcov'))
+```
+
+```{r}
+plot(mod.freegroup, type = 'trace')
+```
+```{r}
+#check whether significantly worse fit
+anova(mod_gender, mod.freegroup)
+```
+
+```{r}
+# freeing the latent mean and variance but defining a small set of 'anchor' items
+# add constraints to see if the model gets worse
+model = mirt.model('F = 1-47
+                   CONSTRAINB = (1-7, a1), (1-7, d)') # use items1-7 as anchor
+
+mod.freegroup2 = multipleGroup(df.pre_fmce_items, model=model, group = gender, 
+                               invariance = c('free_means', 'free_varcov'))
+```
+```{r}
+plot(mod.freegroup2, type = 'trace')
+```
+
+```{r}
+DIF(mod.freegroup2, which.par = c('a1', 'd'), plotdif = TRUE)
+```
+```{r}
+gender = as.character(df.post_fmce$gender)
+
+#completely independent model
+(mod_gender_post = multipleGroup(df.post_fmce_items, model=1, group=gender))
+```
+
+```{r}
+plot(mod_gender_post, type = 'trace')
+```
+
+```{r}
+mod.freegroup3 = multipleGroup(df.post_fmce_items, model=model, group = gender, 
+                               invariance = c('free_means', 'free_varcov'))
+```
+
+```{r}
+back = as.character(df.pre_fmce$physics_exp)
+
+#completely independent model
+(mod_back_pre = multipleGroup(df.pre_fmce_items, model=1, group=back))
+```
+```{r}
+plot(mod_back_pre, type = 'trace')
+```
+```{r}
+plot(mod_back_pre, which.items = 30:39, facet_items = FALSE)
+```
+
+```{r}
+(mod_back_post = multipleGroup(df.post_fmce_items, model=1, group=back))
+```
+```{r}
+plot(mod_back_post, type = 'trace')
+```
+## Longitudinal IRT
+```{r}
+model_long = 'Time1 = 1-47
+Time2 = 48-94
+COV = Time1*Time2'
+itemloadings = rep(1:47, times = 2)
+```
+
+```{r}
+F1_d = (0.5 + 1.1 + 0.8 + 1.3) / 4
+F2_d = (-0.2 - 0.7 + 0.5 - 0.2 + 1.2 + 0.6 -0.4) /7
+F3_d = (8.7 + 2.7 + 6.8 + 4) /4
+F4_d = (-0.5 + 1 - 1.2 -0.4 + 3.5 + 1.4 + 5.5 +1.0 + 5.1) / 9
+F5_d = (-3.5 - 1.9 - 0.2 - 1.8 - 0.9 + 0.9 + 0.4 + 0.2 -0.2 + 1) / 10
+F6_d = (-0.9 - 0.6 + 0.3 + 0.3 + 0.3 -2.4 -3 + 0.7) / 8
+
+F1_d
+F2_d
+F3_d
+F4_d
+F5_d
+F6_d
+```
+
+
+### Replot with subset of items
+```{r}
+df.pre_fmce_long_sub = df.pre_fmce_long %>% subset(!item %in% c('Q5', 'Q6',
+                                                                'Q15', 'Q20',
+                                                                'Q21', 'Q25', 'Q33',
+                                                                'Q35', 'Q37'))
+```
+
+```{r}
+df.post_fmce_long_sub = df.post_fmce_long %>% subset(!item %in% c('Q5', 'Q6',
+                                                                'Q15', 'Q20',
+                                                                'Q21', 'Q25', 'Q33',
+                                                                'Q35', 'Q37'))
+```
+
+```{r}
+#create the long format of combined data
+df.pre_post_fmce_long_sub = combine(df.pre_fmce_long_sub, df.post_fmce_long_sub)
+```
+
+
+```{r}
+ms = df.pre_post_fmce_long_sub %>% 
+  group_by(id, source, physics_exp) %>% 
+  summarise(response = sum(response))
+
+ggplot(ms,
+       aes(x = source, y = response, col = physics_exp)) +
+  stat_summary(fun.data = "mean_se",
+               size = 0.5) +
+  stat_summary(aes(group = physics_exp),
+               fun.y = mean,
+               geom = "line") +
+  expand_limits(y = c(10, 40)) +
+  labs(x = "", y = "FMCE score")
+```
+
+```{r}
+ms = df.pre_post_fmce_long_sub %>% 
+  group_by(id, source, gender) %>% 
+  summarise(response = sum(response))
+
+ggplot(ms,
+       aes(x = source, y = response, col = gender)) +
+  stat_summary(fun.data = "mean_se",
+               size = 0.5) +
+  stat_summary(aes(group = gender),
+               fun.y = mean,
+               geom = "line") +
+  expand_limits(y = c(10, 40)) +
+  labs(x = "", y = "FMCE score")
+```
+
+```{r}
+ms <- df.pre_fmce_long_sub %>%
+  group_by(id, physics_exp, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = physics_exp)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("preFMCE (subset) - group by incoming preparation")
+```
+```{r}
+ms <- df.post_fmce_long_sub %>%
+  group_by(id, physics_exp, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = physics_exp)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("postFMCE (subset) - group by incoming preparation")
+```
+
+```{r}
+ms <- df.pre_fmce_long_sub %>%
+  group_by(id, gender, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = gender)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("preFMCE (subset) - Gender")
+```
+```{r}
+ms <- df.post_fmce_long_sub %>%
+  group_by(id, gender, scene) %>%
+  summarise(mean_score = mean(response))
+
+ggplot(ms, aes(x = scene, y = mean_score, col = gender)) + 
+  stat_summary(fun.data = "mean_se") +
+  theme(legend.position = "none") +
+  expand_limits(y = c(0, 1)) +
+  ggtitle("postFMCE (subset) Gender")
+```
+
+```{r factor analysis - pre3, message=FALSE, echo=FALSE}
+res1b = fa(df.pre_fmce_items,
+           nfactors = 9,
+           fm = "fa",
+           rotate = "none")
+
+fa.diagram(res1b)
+```
+
+### CTT EFA
+```{r factor analysis - pre3.1, message=FALSE, echo=FALSE}
+#Get the eigenvalues derived in the extracted factor solution
+print("Eigenvalues:")
+res1b$e.values[1:6]
+
+#We can use the eigenvalues to calculate the percentage of variance accounted for by each of the factors. Given that the maximum sum of the eigenvalues will always be equal to the total number of variables in the analysis, we can calculate the percentage of variance accounted for by dividing each eigenvalue by the total number of variables in the analysis.
+print("Proportion of total variance:")
+sum(res1b$e.values[1:6]) / length(res1b$e.values)
+
+print(res1b$loadings, cutoff = 0.4, digits = 3)
+sum(res1b$loadings[, 1]^2)
+```
+The sum of squares (SS) loadings is the sum of all the coefficents to the factor. SS loadings corresponds to eigenvalues only when no rotations (orthogonal or oblique) are involved in factor extraction. The variances of rotated factors do not correspond to the principal components anymore. 
+[ref1: https://stats.stackexchange.com/questions/205459/whats-the-relationship-between-initial-eigenvalues-and-sums-of-squared-loadings/205477#205477]
+[ref2: https://stats.stackexchange.com/questions/151653/what-is-the-intuitive-reason-behind-doing-rotations-in-factor-analysis-pca-how/151688#151688]
+```{r factor analysis - pre4, message=FALSE, echo=FALSE}
+#Orthogonal rotation methods -> assumes that the factors are uncorrelated
+res1c = factanal(df.pre_fmce_items, factors = 7, rotation = "varimax")
+print(res1c$loadings, cutoff = 0.4)
+```
+```{r factor analysis - pre5}
+#Oblique rotation methods assume that the factors are correlated 
+res1d = factanal(df.pre_fmce_items, factors = 7, rotation = "promax")
+res1d
+print("Factor loadings with a minimum value of 0.4")
+print(res1d$loadings, cutoff = 0.4)
+```
+
+### The difference between rotation methods ("promax" vs. "varimax")
+Promax is an oblique rotation and accounts for correlations between the components. Varimax maximizes factor loadings and assumes no correlations between components. "Perhaps the best way to decide between orthogonal and oblique rotation is to request oblique rotation with the desired number of factors and look at the correlations among factors...if factor correlations are not driven by the data, the solution remains nearly orthogonal. Look at the factor correlation matrix for correlations around .32 and above. If correlations exceed .32, then there's 10% (or more) overlap in variance among factors, enough variance to warrant oblique rotation unless there are compelling reasons for orthogonal rotation."
+[ref: http://hosted.jalt.org/test/PDF/Brown31.pdf]
+
+### Reasons for rotation
+Rotations are done for the sake of interpretation of the extracted factors in factor analysis. Rotation is done in the pursuit of some structure of the loading matrix, which may be called simple structure. It is when different factors tend to load different variables. In a sense, typical simple structure is where "clusters" of correlated variables show up. You then intrepret a factor as the meaning which lies on the intersection of the meaning of the variables which are loaded enough by the factor. To receive different meaning, factors should load variables differentially. 
+[ref: https://stats.stackexchange.com/questions/151653/what-is-the-intuitive-reason-behind-doing-rotations-in-factor-analysis-pca-how/151688#151688]
+
+
+### CFA pre
+```{r}
+# exclude item 6, 15, 20, 33, 35 and 37 (items with poor factor loadings in EFA)
+df.pre_fmce_items_sub = df.pre_fmce %>% dplyr::select(-c(Q6,
+                                                           Q15,
+                                                           Q20,
+                                                           Q33,
+                                                           Q35,
+                                                           Q37))
+```
+
+```{r}
+fit_cfa_scene_pre = cfa(HS.model1, data = df.pre_fmce_items_sub)
+summary(fit_cfa_scene_pre, fit.measures=TRUE)
+```
+
+```{r}
+fit_cfa_factor_pre = cfa(HS.model2, data = df.pre_fmce_items_sub)
+summary(fit_cfa_factor_pre , fit.measures=TRUE)
+```
+
+```{r}
+anova(fit_cfa_factor_pre, fit_cfa_scene_pre)
+```
+
+## post-FMCE
+
+```{r}
+# exclude item 6, 15, 20, 33, 35 and 37 (items with poor factor loadings in EFA)
+df.post_fmce_items_sub = df.post_fmce %>% dplyr::select(-c('Q5', 
+                                                           'Q6',
+                                                           'Q15', 
+                                                           'Q20',
+                                                           'Q21', 
+                                                           'Q25', 
+                                                           'Q33',
+                                                           'Q35', 
+                                                           'Q37'))
+```
+
+### Confirmatory Factor Analysis (post)
+```{r}
+HS.model1 = 'factor1 =~ Q1 + Q2 + Q3 + Q4 + Q7
+factor2 =~ Q8 + Q9 + Q10 + Q11 + Q12 + Q13
+factor3 =~ Q14 + Q16 + Q17 + Q18 + Q19 
+factor4 =~ Q22 + Q23 + Q24 + Q26 
+factor5 =~ Q27 + Q28 + Q29
+factor6 =~ Q30 + Q31 + Q32 + Q34 + Q36 + Q38 + Q39
+factor7 =~ Q40 + Q41 + Q42 + Q43
+factor8 =~ Q44 + Q45 + Q46 + Q47'
+
+```
+
+```{r}
+fit_cfa_scene = cfa(HS.model1, data = df.post_fmce_items_sub)
+```
+
+```{r}
+summary(fit_cfa_scene, fit.measures=TRUE)
+```
+
+```{r factor analysis - post1}
+#Factors generated from oblique rotation methods
+HS.model2 = 'factor1 =~ Q8 + Q9 + Q10 + Q11 + Q12 + Q13 + Q21 + Q27 + Q28 + Q29
+factor2 =~ Q1 + Q2 + Q3 + Q4 + Q5 + Q7
+factor3 =~ Q30 + Q31 + Q32 + Q34 + Q39
+factor4 =~ Q22 + Q23 + Q24 + Q25 + Q26 
+factor5 =~ Q14 + Q16 + Q17 + Q18 + Q19
+factor6 =~ Q44 + Q45 + Q46 + Q47
+factor7 =~ Q36 + Q38
+factor8 =~ Q40 + Q41 + Q42 + Q43'
+```
+
+```{r factor analysis - post2}
+fit_cfa_factor = cfa(HS.model2, data = df.post_fmce_items_sub)
+```
+
+```{r factor analysis - post3}
+summary(fit_cfa_factor, fit.measures=TRUE)
+```
+
+```{r factor analysis - post7}
+#Model comparision
+anova(fit_cfa_scene, fit_cfa_factor)
+```
+
+
+## LTM Models
+### 1PL Rasch Model
+The rasch() model assumes equal discrimination parameters across items and by default estimates its value. 
+```{r ltm-1}
+#1PL Rasch model on pre-FMCE
+(fit.ltm1 = rasch(df.pre_fmce_items))
+```
+
+```{r ltm-2}
+#1PL Rasch model on post-FMCE
+(fit.ltm2 = rasch(df.post_fmce_items))
+```
+Items difficulties went down in the post test. Not a surprise. 
+
+### 2PL Model
+```{r ltm-3}
+#2PL Model on pre-FMCE
+(fit.ltm3 = ltm(df.pre_fmce_items ~ z1))
+```
+
+```{r ltm-4}
+#2PL Model on post-FMCE
+(fit.ltm4 = ltm(df.post_fmce_items ~ z1))
+```
+
+```{r ltm-5}
+# Model comparison
+anova(fit.ltm1, fit.ltm3)
+```
+Lower values of the AIC and BIC indicate better model fit. The two-parameter logistic model, which assumes a different discrimination parameter per item, provides a better fit than the unconstrained Rasch model. 
+
+```{r ltm-6}
+#3PL Model on pre-FMCE incorporating the guessing parameter
+(fit.ltm5 = tpm(df.pre_fmce_items, max.guessing = 0.20))
+```
+
+```{r ltm-7}
+anova(fit.ltm3, fit.ltm5)
+```
+Incorporating the guessing parameter further improves the model fit.
+
+## GLMM Models
+
+```{r}
+#exclude problematic items from post-FMCE long format
+#item with poor discrminiation parameter & did not load on any factor: Q15, Q33
+df.post_fmce_long_sub = df.post_fmce_long %>% subset(!item %in% c('Q15',
+                                                                  'Q33'))
+
+df.pre_fmce_long_sub = df.pre_fmce_long %>% subset(!item %in% c('Q15',
+                                                                  'Q33'))
+```
+
+```{r}
+#create new factor variable 
+df.post_fmce_long_sub = df.post_fmce_long_sub %>% mutate(factor = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q7", "Q19"), "factor2",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10", "Q11", "Q12", "Q13", "Q21", "Q27", "Q28", "Q29"), "factor5",
+                                                             ifelse(item %in% c("Q14", "Q16", "Q17", "Q18", "Q22", "Q23", "Q24", "Q25", "Q26"), "factor4",
+                                                                    ifelse(item %in% c("Q30", "Q31", "Q32","Q34", "Q35", "Q36", "Q38", "Q39"), "factor6",
+                                                                           ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "factor3", 
+                                                                                  ifelse(item %in% c("Q44", "Q45", "Q46", "Q47"), "factor1", NA)))))))
+
+factor_levels = c("factor1", "factor2", "factor3", "factor4", "factor5", "factor6")
+df.post_fmce_long_sub = df.post_fmce_long_sub %>% mutate(factor = factor(factor, levels = factor_levels))
+```
+
+```{r}
+#create new factor variable 
+df.pre_fmce_long_sub = df.pre_fmce_long_sub %>% mutate(factor = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q7", "Q19"), "factor2",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10", "Q11", "Q12", "Q13", "Q21", "Q27", "Q28", "Q29"), "factor5",
+                                                             ifelse(item %in% c("Q14", "Q16", "Q17", "Q18", "Q22", "Q23", "Q24", "Q25", "Q26"), "factor4",
+                                                                    ifelse(item %in% c("Q30", "Q31", "Q32","Q34", "Q35", "Q36", "Q38", "Q39"), "factor6",
+                                                                           ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "factor3", 
+                                                                                  ifelse(item %in% c("Q44", "Q45", "Q46", "Q47"), "factor1", NA)))))))
+
+factor_levels = c("factor1", "factor2", "factor3", "factor4", "factor5", "factor6")
+df.pre_fmce_long_sub = df.pre_fmce_long_sub %>% mutate(factor = factor(factor, levels = factor_levels))
+```
+
+```{r person-by-item covariate model - 2g}
+# define a new covariate for item subset - physics_exp DIF 
+dif1g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene1")))
+
+dif2g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene2")))
+
+dif3g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene3")))
+
+dif4g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene4")))
+
+dif5g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene5")))
+
+dif6g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene6")))
+
+dif7g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene7")))
+
+dif8g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene8")))
+
+dif9g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene9")))
+
+dif10g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene10")))
+
+dif11g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene11")))
+```
+
+```{r person-by-item covariate model - 2g}
+# define a new covariate for item subset - physics_exp DIF 
+dif1g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene1")))
+
+dif2g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene2")))
+
+dif3g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene3")))
+
+dif4g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene4")))
+
+dif5g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene5")))
+
+dif6g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene6")))
+
+dif7g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene7")))
+
+dif8g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene8")))
+
+dif9g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene9")))
+
+dif10g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene10")))
+
+dif11g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene11")))
+```
+
+
+```{r}
+fit.glm1 = glmer(response ~ gender + dif1g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+```
+
+```{r glm-2}
+fit.glm1 %>% summary()
+```
+```{r}
+fit.glm2 = glmer(response ~ gender + dif2g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+```{r}
+fit.glm2 %>% summary()
+```
+```{r}
+fit.glm3 = glmer(response ~ gender + dif3g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm3 %>% summary()
+```
+```{r}
+fit.glm4 = glmer(response ~ gender + dif4g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm4 %>% summary()
+```
+```{r}
+fit.glm5 = glmer(response ~ gender + dif5g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm6 = glmer(response ~ gender + dif6g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm7 = glmer(response ~ gender + dif7g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm8 = glmer(response ~ gender + dif8g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm9 = glmer(response ~ gender + dif9g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm10 = glmer(response ~ gender + dif10g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+```{r}
+fit.glm11 = glmer(response ~ gender + dif11g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+```
+
+### 1PL with physics background differences and DIF
+DIF would be written as a fixed effect of physics background preparation plus a random effect of physics background by item.
+
+```{r person-by-item covariate model - 2}
+# define a new covariate for item subset - physics_exp DIF 
+dif1 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene1")))
+
+dif2 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene2")))
+
+dif3 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene3")))
+
+dif4 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene4")))
+
+dif5 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene5")))
+
+dif6 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene6")))
+
+dif7 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene7")))
+
+dif8 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene8")))
+
+dif9 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene9")))
+
+dif10 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene10")))
+
+dif11 = with(df.pre_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene11")))
+```
+
+### Overall DIF
+```{r}
+fit.1pl_dif_pre = glmer(response ~ physics_exp + (1 | id) + (physics_exp | item),
+                    data = df.pre_fmce_long_sub,
+                    family = "binomial")
+
+fit.1pl_dif_pre %>% summary()
+```
+```{r}
+fit.1pl_dif_post = glmer(response ~ physics_exp + (1 | id) + (physics_exp | item),
+                    data = df.post_fmce_long_sub,
+                    family = "binomial")
+
+fit.1pl_dif_post %>% summary()
+```
+```{r}
+fit.1pl_dif = glmer(response ~ physics_exp * source + (1 | id) + (physics_exp | item),
+                       data = df.pre_post_fmcΩe_long_sub,
+                       family = "binomial")
+
+fit.1pl_dif %>% summary()
+```
+
+### Gender DIF
+```{r}
+fit.gender_dif_pre = glmer(response ~ gender + (1 | id) + (scene | item),
+                       data = df.pre_fmce_long,
+                       family = "binomial")
+
+fit.gender_dif_pre %>% summary()
+```
+
+```{r}
+fit.gender_dif_post = glmer(response ~ physics_exp + gender + (1 | id) + (gender | item),
+                       data = df.post_fmce_long_sub,
+                       family = "binomial")
+
+fit.gender_dif_post %>% summary()
+```
+
+```{r}
+fit.gender_dif = glmer(response ~ physics_exp + gender * source + (1 | id) + (gender | item),
+                       data = df.pre_post_fmce_long_sub,
+                       family = "binomial")
+
+fit.gender_dif %>% summary()
+```
+
+### DIF - scene1
+```{r}
+fit.1pl_dif_s1 = glmer(response ~ physics_exp + dif1 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s1 %>% summary()
+```
+
+```{r}
+fit.gender_s1 = glmer(response ~ physics_exp + dif1g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+```
+```{r}
+fit.gender_s1 %>% summary()
+```
+
+### DIF - scene2
+```{r}
+fit.1pl_dif_s2 = glmer(response ~ physics_exp + dif2 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s2 %>% summary()
+```
+
+```{r}
+fit.gender_s2 = glmer(response ~ physics_exp + dif2g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s2 %>% summary()
+```
+
+### DIF - scene3
+```{r}
+fit.1pl_dif_s3 = glmer(response ~ physics_exp + dif3 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s3 %>% summary()
+```
+
+```{r}
+fit.gender_s3 = glmer(response ~ physics_exp + dif3g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s3 %>% summary()
+```
+
+### DIF - scene4
+```{r}
+fit.1pl_dif_s4 = glmer(response ~ physics_exp + dif4 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s4 %>% summary()
+```
+
+```{r}
+fit.gender_s4 = glmer(response ~ physics_exp + dif4g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s4 %>% summary()
+```
+
+### DIF - scene5
+```{r}
+fit.1pl_dif_s5 = glmer(response ~ physics_exp + dif5  + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s5 %>% summary()
+```
+
+```{r}
+fit.gender_s5 = glmer(response ~ physics_exp + dif5g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s5 %>% summary()
+```
+
+### DIF - scene6
+```{r}
+fit.1pl_dif_s6 = glmer(response ~ physics_exp + dif6 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s6 %>% summary()
+```
+
+```{r}
+fit.gender_s6 = glmer(response ~ physics_exp + dif6g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s6 %>% summary()
+```
+
+### DIF - scene7
+```{r}
+fit.1pl_dif_s7 = glmer(response ~ physics_exp + dif7 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s7 %>% summary()
+```
+
+```{r}
+fit.gender_s7 = glmer(response ~ physics_exp + dif7g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s7 %>% summary()
+```
+
+### DIF - scene8
+```{r}
+fit.1pl_dif_s8 = glmer(response ~ physics_exp + dif8 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s8 %>% summary()
+```
+
+```{r}
+fit.gender_s8 = glmer(response ~ physics_exp + dif8g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s8 %>% summary()
+```
+
+### DIF - scene9
+```{r}
+fit.1pl_dif_s9 = glmer(response ~ physics_exp + dif9 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s9 %>% summary()
+```
+
+```{r}
+fit.gender_s9 = glmer(response ~ physics_exp + dif9g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s9 %>% summary()
+```
+
+### DIF - scene10
+```{r}
+fit.1pl_dif_s10 = glmer(response ~ physics_exp + dif10 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s10 %>% summary()
+```
+
+```{r}
+fit.gender_s10 = glmer(response ~ physics_exp + dif10g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s10 %>% summary()
+```
+
+### DIF - scene11
+```{r}
+fit.1pl_dif_s11 = glmer(response ~ physics_exp + dif11 + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s11 %>% summary()
+```
+
+```{r}
+fit.gender_s11 = glmer(response ~ physics_exp + dif11g + (1 | id) + (1 | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s11 %>% summary()
+```
+```{r}
+fit.gender_s2 = glmer(response ~ dif2g + (1 | id) + (gender | item),
+                    data = df.pre_fmce_long,
+                    family = "binomial")
+
+fit.gender_s2 %>% summary()
+```
+
+```{r}
+dif1 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene1")))
+
+dif2 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene2")))
+
+dif3 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene3")))
+
+dif4 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene4")))
+
+dif5 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene5")))
+
+dif6 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene6")))
+
+dif7 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene7")))
+
+dif8 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene8")))
+
+dif9 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene9")))
+
+dif10 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene10")))
+
+dif11 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene11")))
+```
+### DIF - scene1 -post
+```{r}
+fit.1pl_dif_s1_post = glmer(response ~ physics_exp + dif1 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s1_post %>% summary()
+```
+### DIF - scene2 -post
+```{r}
+fit.1pl_dif_s2_post = glmer(response ~ physics_exp + dif2 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s2_post %>% summary()
+```
+### DIF - scene3 -post
+```{r}
+fit.1pl_dif_s3_post = glmer(response ~ physics_exp + dif3 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s3_post %>% summary()
+```
+### DIF - scene4 -post
+```{r}
+fit.1pl_dif_s4_post = glmer(response ~ physics_exp + dif4 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s4_post %>% summary()
+```
+### DIF - scene5 -post
+```{r}
+fit.1pl_dif_s5_post = glmer(response ~ physics_exp + dif5 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s5_post %>% summary()
+```
+
+### DIF - scene6 -post
+```{r}
+fit.1pl_dif_s6_post = glmer(response ~ physics_exp + dif6 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s6_post %>% summary()
+```
+
+### DIF - scene7 -post
+```{r}
+fit.1pl_dif_s7_post = glmer(response ~ physics_exp + dif7 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s7_post %>% summary()
+```
+### DIF - scene8 -post
+```{r}
+fit.1pl_dif_s8_post = glmer(response ~ physics_exp + dif8 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s8_post %>% summary()
+```
+### DIF - scene9 -post
+```{r}
+fit.1pl_dif_s9_post = glmer(response ~ physics_exp + dif9 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s9_post %>% summary()
+```
+### DIF - scene10 -post
+```{r}
+fit.1pl_dif_s10_post = glmer(response ~ physics_exp + dif10 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s10_post %>% summary()
+```
+### DIF - scene11 -post
+```{r}
+fit.1pl_dif_s11_post = glmer(response ~ physics_exp + dif11 + (1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_s11_post %>% summary()
+```
+
+### Group items by factors
+```{r}
+fit.1pl_dif_post = glmer(response ~ physics_exp +(1 | id) + (physics_exp  | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_post %>% summary()
+```
+
+```{r}
+isSingular(fit.1pl_dif_post, tol = 1e-05)
+```
+
+```{r}
+fit.1pl_dif_post_2 = glmer(response ~ physics_exp +(1 | id) + (1 | item),
+                    data = df.post_fmce_long,
+                    family = "binomial")
+
+fit.1pl_dif_post_2 %>% summary()
+```
+
+
+```{r}
+fit.lm <- glm(response ~ scene * physics_exp, 
+              data = df.pre_fmce_long,
+                  family = "binomial")
+
+summary(fit.lm)
+
+fit.lm2 = glm(response ~ item * physics_exp, 
+              data = df.pre_fmce_long,
+              family = "binomial")
+
+summary(fit.lm2)
+
+fit.lm3 <- glm(response ~ scene * physics_exp, 
+              data = df.post_fmce_long,
+                  family = "binomial")
+
+summary(fit.lm3)
+
+
+fit.lm4 <- glm(response ~ item * physics_exp, 
+              data = df.post_fmce_long,
+                  family = "binomial")
+
+summary(fit.lm4)
+
+```
+```{r}
+fit.glm11 = glmer(response ~ physics_exp + dif1 + (physics_exp  | item ) + (1 | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+```
+```{r}
+fit.glm11 %>% summary()
+```
+
+
+```{r exploratory-glm-dif}
+fit.glm6 = glmer(response ~ physics_exp + (1 | item ) + (physics_exp  | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+
+```
+
+```{r}
+fit.glm6 %>% summary()
+```
+```{r}
+fit.glm7 = glmer(response ~  physics_exp * scene + (1 | scene ) + (1 | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+```
+
+```{r}
+fit.glm7 %>% summary()
+```
+```{r}
+fit.glm8 = glmer(response ~ physics_exp + dif11 + (1 | scene ) + (physics_exp | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+
+fit.glm8 %>% summary()
+```
+```{r}
+fit.glm9 = glmer(response ~ physics_exp + dif3 + (physics_exp | item ) + (1 | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+
+fit.glm9 %>% summary()
+```
+```{r}
+fit.glm10 = glmer(response ~ physics_exp + dif4 + (physics_exp | item ) + (1 | id), 
+      data = df.pre_fmce_long, 
+      family = "binomial")
+
+fit.glm10 %>% summary()
+```
+
+
+```{r person-by-item covariate model - 3}
+fit.glm3 = glmer(response ~ -1 + item + physics_exp + dif1 + (1 + dif1 | id),
+                  data = df.pre_fmce_long,
+                  family = "binomial")
+```
+
+```{r person-by-item covariate model - 4}
+fit.glm3 %>% summary()
+```
+
+Limitation: GLM models do not offer the flexibility to incorporate item-specific discrimination parameters. 
+
+```{r glm-5}
+# define a new covariate for item subset - physics_exp DIF 
+dif2 = with(df.post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene2")))
+```
+
+```{r glm-6}
+fit.glm4 = glmer(response ~ -1 + item + physics_exp + dif2 + (1 + dif2 | id),
+                  data = df.post_fmce_long,
+                  family = "binomial")
+```
+```{r glm-7}
+fit.glm4 %>% summary()
+```
+
+```{r glm-8}
+# define a new covariate for item subset - physics_exp DIF 
+dif3 = with(df.pre_post_fmce_long,
+            factor(0 + (physics_exp == "low" & scene == "scene2")))
+
+#item+time+(time | id) + dif * time
+fit.glm5 = glmer(response ~ -1 + item + physics_exp + dif3*source + (1 + source + dif3 | id),
+                  data = df.pre_post_fmce_long,
+                  family = "binomial")
+```
+```{r glm-9}
+fit.glm5 %>% summary()
+```
+
+```{r}
+# exclude the problematic items
+df.pre_fmce_items_sub = df.pre_fmce_items %>% dplyr::select(-c(Q5,
+                                                           Q6,
+                                                           Q15,
+                                                           Q33,
+                                                           Q35,
+                                                           Q37,
+                                                           Q39
+                                                           ))
+```

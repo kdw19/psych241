@@ -1,0 +1,613 @@
+---
+title: "Dif_analysis"
+author: "Karen W."
+date: "12/14/2019"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    theme: cosmo
+    highlight: tango
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Load packages
+```{r, message=FALSE}
+library("knitr")
+library("tidyverse")
+library("lme4")
+library("ltm")
+library("car")
+library("brms")
+library("psych")
+library("mirt")
+library("lavaan")
+library("qgraph")
+library("gdata")
+```
+
+```{r}
+# load cleaned-up data that removed redundant entries (n=1106)
+df.fmce_combined = read_csv("../data/FMCE.csv")
+
+# omit incomplete data
+df.fmce_combined = na.omit(df.fmce_combined)
+
+# create an id variable from 1 to n
+df.fmce_combined$id = factor(seq.int(nrow(df.fmce_combined)))
+
+```
+
+```{r}
+#create the long format 
+df.pre_fmce = df.fmce_combined %>% dplyr::select(-c(Q1.y:Year.y))
+
+df.pre_fmce = df.pre_fmce %>% rename_at(vars(ends_with(".x")),
+                                        funs(str_remove(., ".x")))
+
+df.pre_fmce = df.pre_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+df.pre_fmce_long = gather(df.pre_fmce, item, response, "Q1":"Q47")
+
+#create the long format for post-FMCE
+df.post_fmce = df.fmce_combined %>% dplyr::select(-c(Q1.x:Q47.x, Score.x, Year.x))
+
+df.post_fmce = df.post_fmce %>% rename_at(vars(ends_with(".y")),
+                                        funs(str_remove(., ".y")))
+
+df.post_fmce = df.post_fmce %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+df.post_fmce_long = gather(df.post_fmce, item, response, "Q1":"Q47")
+
+# re-arrange factor levels
+item_levels = c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10",
+                "Q11", "Q12", "Q13", "Q14", "Q15", "Q16", "Q17", "Q18", "Q19",
+                "Q20", "Q21", "Q22", "Q23", "Q24", "Q25", "Q26", "Q27", "Q28",
+                "Q29", "Q30", "Q31", "Q32", "Q33", "Q34", "Q35", "Q36", "Q37", "Q38",
+                "Q39", "Q40", "Q41", "Q42", "Q43", "Q44", "Q45", "Q46", "Q47")
+
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(item = factor(item, levels = item_levels),
+                                               response = as.numeric(response == TRUE))
+df.post_fmce_long = df.post_fmce_long %>% mutate(item = factor(item, levels = item_levels),
+                                                 response = as.numeric(response == TRUE))
+```
+
+```{r}
+# create a new variable indicating the item scenario
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(scene = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"), "scene1",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10"), "scene2",
+                                                             ifelse(item %in% c("Q11", "Q12", "Q13"), "scene3",
+                                                                    ifelse(item %in% c("Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20", "Q21"), "scene4",
+                                                                           ifelse(item %in% c("Q22", "Q23", "Q24", "Q25", "Q26"), "scene5",
+                                                                                  ifelse(item %in% c("Q27", "Q28", "Q29"), "scene6",
+                                                                                         ifelse(item %in% c("Q30", "Q31", "Q32", "Q33", "Q34"), "scene7",
+                                                                                                ifelse(item %in% c("Q35", "Q36", "Q37", "Q38"), "scene8",
+                                                                                                       ifelse(item == "Q39", "scene9",
+                                                                                                              ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "scene10", "scene11")))))))))))
+
+scene_levels = c("scene1", "scene2", "scene3", "scene4", "scene5", "scene6", "scene7", "scene8", "scene9", "scene10", "scene11")
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(scene = factor(scene, levels = scene_levels))
+```
+
+```{r}
+# create a binarized variable of physics course experience
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+physics_exp_levels = c("low", "high")
+df.pre_fmce_long = df.pre_fmce_long %>% mutate(physics_exp = factor(physics_exp, levels = physics_exp_levels),
+                                               gender = factor(gender))
+```
+
+```{r}
+# create a new variable indicating the item scenario
+df.post_fmce_long = df.post_fmce_long %>% mutate(scene = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"), "scene1",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10"), "scene2",
+                                                             ifelse(item %in% c("Q11", "Q12", "Q13"), "scene3",
+                                                                    ifelse(item %in% c("Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20", "Q21"), "scene4",
+                                                                           ifelse(item %in% c("Q22", "Q23", "Q24", "Q25", "Q26"), "scene5",
+                                                                                  ifelse(item %in% c("Q27", "Q28", "Q29"), "scene6",
+                                                                                         ifelse(item %in% c("Q30", "Q31", "Q32", "Q33", "Q34"), "scene7",
+                                                                                                ifelse(item %in% c("Q35", "Q36", "Q37", "Q38"), "scene8",
+                                                                                                       ifelse(item == "Q39", "scene9",
+                                                                                                              ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "scene10", "scene11")))))))))))
+
+scene_levels = c("scene1", "scene2", "scene3", "scene4", "scene5", "scene6", "scene7", "scene8", "scene9", "scene10", "scene11")
+df.post_fmce_long = df.post_fmce_long %>% mutate(scene = factor(scene, levels = scene_levels),
+                                                 gender = factor(gender))
+```
+
+```{r}
+# create a binarized variable of physics course experience
+df.post_fmce_long = df.post_fmce_long %>% mutate(physics_exp = ifelse(Physics %in% c("AP", "CollegeAlg", "CollegeCalc", "HS"), "high", "low"))
+
+physics_exp_levels = c("low", "high")
+df.post_fmce_long = df.post_fmce_long %>% mutate(physics_exp = factor(physics_exp, levels = physics_exp_levels),
+                                                 gender = factor(gender))
+```
+
+```{r}
+df.post_fmce_long_sub = df.post_fmce_long %>% subset(!item %in% c('Q15',
+                                                                  'Q33'))
+
+df.pre_fmce_long_sub = df.pre_fmce_long %>% subset(!item %in% c('Q15',
+                                                                  'Q33'))
+```
+
+```{r}
+#create new factor variable 
+df.pre_fmce_long_sub = df.pre_fmce_long_sub %>% mutate(factor = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q7", "Q19"), "factor2",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10", "Q11", "Q12", "Q13", "Q21", "Q27", "Q28", "Q29"), "factor5",
+                                                             ifelse(item %in% c("Q14", "Q16", "Q17", "Q18", "Q22", "Q23", "Q24", "Q25", "Q26"), "factor4",
+                                                                    ifelse(item %in% c("Q30", "Q31", "Q32","Q34", "Q35", "Q36", "Q38", "Q39"), "factor6",
+                                                                           ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "factor3", 
+                                                                                  ifelse(item %in% c("Q44", "Q45", "Q46", "Q47"), "factor1", NA)))))))
+
+factor_levels = c("factor1", "factor2", "factor3", "factor4", "factor5", "factor6")
+df.pre_fmce_long_sub = df.pre_fmce_long_sub %>% mutate(factor = factor(factor, levels = factor_levels))
+```
+
+```{r}
+#create new factor variable 
+df.post_fmce_long_sub = df.post_fmce_long_sub %>% mutate(factor = ifelse(item %in% c("Q1", "Q2", "Q3", "Q4", "Q5", "Q7", "Q19"), "factor2",
+                                                      ifelse(item %in% c("Q8", "Q9", "Q10", "Q11", "Q12", "Q13", "Q21", "Q27", "Q28", "Q29"), "factor5",
+                                                             ifelse(item %in% c("Q14", "Q16", "Q17", "Q18", "Q22", "Q23", "Q24", "Q25", "Q26"), "factor4",
+                                                                    ifelse(item %in% c("Q30", "Q31", "Q32","Q34", "Q35", "Q36", "Q38", "Q39"), "factor6",
+                                                                           ifelse(item %in% c("Q40", "Q41", "Q42", "Q43"), "factor3", 
+                                                                                  ifelse(item %in% c("Q44", "Q45", "Q46", "Q47"), "factor1", NA)))))))
+
+factor_levels = c("factor1", "factor2", "factor3", "factor4", "factor5", "factor6")
+df.post_fmce_long_sub = df.post_fmce_long_sub %>% mutate(factor = factor(factor, levels = factor_levels))
+```
+
+## gender
+```{r}
+# define a new covariate for item subset - physics_exp DIF 
+dif1g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene1")))
+
+dif2g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene2")))
+
+dif3g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene3")))
+
+dif4g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene4")))
+
+dif5g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene5")))
+
+dif6g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene6")))
+
+dif7g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene7")))
+
+dif8g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene8")))
+
+dif9g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene9")))
+
+dif10g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene10")))
+
+dif11g_pre = with(df.pre_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene11")))
+```
+
+```{r}
+dif1g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene1")))
+
+dif2g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene2")))
+
+dif3g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene3")))
+
+dif4g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene4")))
+
+dif5g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene5")))
+
+dif6g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene6")))
+
+dif7g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene7")))
+
+dif8g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene8")))
+
+dif9g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene9")))
+
+dif10g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene10")))
+
+dif11g = with(df.post_fmce_long_sub,
+            factor(0 + (gender == "F" & scene == "scene11")))
+```
+
+
+```{r}
+fit.gender_pre5 = glmer(response ~ gender + dif5g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre5)
+```
+
+```{r}
+fit.gender_pre6 = glmer(response ~ gender + dif6g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre6)
+```
+
+
+```{r}
+fit.gender_pre7 = glmer(response ~ gender + dif7g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre7)
+```
+
+
+```{r}
+fit.gender_pre8 = glmer(response ~ gender + dif8g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre8)
+```
+
+```{r}
+fit.gender_pre9 = glmer(response ~ gender + dif9g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre9)
+```
+
+```{r}
+fit.gender_pre10 = glmer(response ~ gender + dif10g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre10)
+```
+
+```{r}
+fit.gender_pre11 = glmer(response ~ gender + dif11g_pre + (gender | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                 nAGQ = 0)
+summary(fit.gender_pre11)
+```
+
+```{r}
+fit.gender_post_1 = glmer(response ~ gender + dif1g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_1)
+```
+
+```{r}
+fit.gender_post_2 = glmer(response ~ gender + dif2g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_2)
+```
+
+```{r}
+fit.gender_post_3 = glmer(response ~ gender + dif3g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_3)
+```
+
+```{r}
+fit.gender_post_4 = glmer(response ~ gender + dif4g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_4)
+```
+
+```{r}
+fit.gender_post_5 = glmer(response ~ gender + dif5g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_5)
+```
+
+```{r}
+fit.gender_post_6 = glmer(response ~ gender + dif6g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_6)
+```
+
+```{r}
+fit.gender_post_7 = glmer(response ~ gender + dif7g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_7)
+```
+
+```{r}
+fit.gender_post_8 = glmer(response ~ gender + dif8g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_8)
+```
+
+```{r}
+fit.gender_post_9 = glmer(response ~ gender + dif9g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_9)
+```
+
+```{r}
+fit.gender_post_10 = glmer(response ~ gender + dif10g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_10)
+```
+
+
+```{r}
+fit.gender_post_11 = glmer(response ~ gender + dif11g + (gender | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.gender_post_11)
+```
+
+## Physics Background
+```{r}
+# define a new covariate for item subset - physics_exp DIF 
+dif1 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene1")))
+
+dif2 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene2")))
+
+dif3 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene3")))
+
+dif4 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene4")))
+
+dif5 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene5")))
+
+dif6 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene6")))
+
+dif7 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene7")))
+
+dif8 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene8")))
+
+dif9 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene9")))
+
+dif10 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene10")))
+
+dif11 = with(df.pre_fmce_long_sub,
+            factor(0 + (physics_exp == "low" & scene == "scene11")))
+```
+
+```{r}
+fit.back_pre_1 = glmer(response ~ physics_exp + dif1 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_1)
+```
+
+```{r}
+fit.back_pre_2 = glmer(response ~ physics_exp + dif2 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_2)
+```
+
+```{r}
+fit.back_pre_3 = glmer(response ~ physics_exp + dif3 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_3)
+```
+
+```{r}
+fit.back_pre_4 = glmer(response ~ physics_exp + dif4 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_4)
+```
+
+```{r}
+fit.back_pre_5 = glmer(response ~ physics_exp + dif5 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_5)
+```
+
+```{r}
+fit.back_pre_6 = glmer(response ~ physics_exp + dif6 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_6)
+```
+
+```{r}
+fit.back_pre_7 = glmer(response ~ physics_exp + dif7 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_7)
+```
+
+```{r}
+fit.back_pre_8 = glmer(response ~ physics_exp + dif8 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_8)
+```
+
+```{r}
+fit.back_pre_9 = glmer(response ~ physics_exp + dif9 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_9)
+```
+
+```{r}
+fit.back_pre_10 = glmer(response ~ physics_exp + dif10 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_10)
+```
+
+```{r}
+fit.back_pre_11 = glmer(response ~ physics_exp + dif11 + (physics_exp | id) + (factor | item),
+                  data = df.pre_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_pre_11)
+```
+
+```{r}
+fit.back_post_1 = glmer(response ~ physics_exp + dif1 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_1)
+```
+
+```{r}
+fit.back_post_2 = glmer(response ~ physics_exp + dif2 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_2)
+```
+
+```{r}
+fit.back_post_3 = glmer(response ~ physics_exp + dif3 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_3)
+```
+
+```{r}
+fit.back_post_4 = glmer(response ~ physics_exp + dif4 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_4)
+```
+
+```{r}
+fit.back_post_5 = glmer(response ~ physics_exp + dif5 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_5)
+```
+
+```{r}
+fit.back_post_6 = glmer(response ~ physics_exp + dif6 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_6)
+```
+
+```{r}
+fit.back_post_7 = glmer(response ~ physics_exp + dif7 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_7)
+```
+
+```{r}
+fit.back_post_8 = glmer(response ~ physics_exp + dif8 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_8)
+```
+
+```{r}
+fit.back_post_9 = glmer(response ~ physics_exp + dif9 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_9)
+```
+
+```{r}
+fit.back_post_10 = glmer(response ~ physics_exp + dif10 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_10)
+```
+
+```{r}
+fit.back_post_11 = glmer(response ~ physics_exp + dif11 + (physics_exp | id) + (factor | item),
+                  data = df.post_fmce_long_sub,
+                  family = "binomial",
+                  nAGQ = 0)
+summary(fit.back_post_11)
+```
+
+```{r}
+dif_g_pre = c(0.067, -0.533, -0.297, 0.012, 0.225, -0.51, 0.410, 0.6041, 0.2437,-0.09615, -0.18854)
+p_g_pre =c(0.34, 3.61e-07, 0.0026, 0.866, 0.00518, 1.36e-07, 1.31e-06, 1.29e-08, 0.127, 0.452, 0.0225)
+
+dif_g_post = c(-0.105, -0.6421, -0.4815, 0.077, -0.1158,-0.1118, 0.38835, 0.6845, 0.4513, 0.1826, -0.120)
+p_g_post = c(0.185, 4.90e-10, 1.74e-05, 0.33, 0.251, 0.328, 2.40e-05, 1.49e-11, 0.019, 0.127, 0.19)
+
+dif_exp_pre = c(0.4693, 0.3272, 0.2135, -0.3879, -0.2262, -0.2354, -0.3283, '0.7418', -0.2484, 0.4684, '-0.5142')
+p_exp_pre = c(0.000311, 0.147, 0.284, 0.0149, 0.0886, 0.231, 0.0967, 0.000594, 0.407, 0.0104, 0.00295)
+dif_exp_post = c(-0.2442, -0.2532, -0.3789, 0.2879, 0.1267, -0.3911, -0.1943, 0.1732, -0.5557, "0.7454", 0.2899)
+p_exp_post = c(0.0598, 0.154, 0.0314, 0.0264, 0.411, 0.0271, 0.206, 0.337, 0.0614, "0.00017", 0.0647)
+```
+
+```{r}
+sum(dif_g_pre)
+sum(dif_g_post)
+```
+
